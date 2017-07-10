@@ -442,27 +442,13 @@ public class ViewUpdateGenerator
 
         if (view.baseNonPKColumnsInViewPK.isEmpty())
         {
-            int ttl = baseLiveness.ttl();
-            int expirationTime = baseLiveness.localExpirationTime();
-            for (Cell cell : baseRow.cells())
-            {
-                if (cell.ttl() > ttl)
-                {
-                    ttl = cell.ttl();
-                    expirationTime = cell.localDeletionTime();
-                }
-            }
-            return ttl == baseLiveness.ttl()
-                 ? baseLiveness
-                 : LivenessInfo.withExpirationTime(baseLiveness.timestamp(), ttl, expirationTime);
+            return baseLiveness;
         }
 
         ColumnDefinition baseColumn = view.baseNonPKColumnsInViewPK.get(0);
         Cell cell = baseRow.getCell(baseColumn);
         assert isLive(cell) : "We shouldn't have got there if the base row had no associated entry";
-
-        long timestamp = Math.max(baseLiveness.timestamp(), cell.timestamp());
-        return LivenessInfo.withExpirationTime(timestamp, cell.ttl(), cell.localDeletionTime());
+        return LivenessInfo.withExpirationTime(cell.timestamp(), cell.ttl(), cell.localDeletionTime(), true);
     }
 
     private long computeTimestampForEntryDeletion(Row baseRow)

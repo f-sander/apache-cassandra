@@ -54,7 +54,7 @@ public class BTreeRow extends AbstractRow
 
     // We need to filter the tombstones of a row on every read (twice in fact: first to remove purgeable tombstone, and then after reconciliation to remove
     // all tombstone since we don't return them to the client) as well as on compaction. But it's likely that many rows won't have any tombstone at all, so
-    // we want to speed up that case by not having to iterate/copy the row in this case. We could keep a single boolean telling us if we have tombstones,
+    // we want to speed up that case by not having to iterate/copy the row iin this case. We could keep a single boolean telling us if we have tombstones,
     // but that doesn't work for expiring columns. So instead we keep the deletion time for the first thing in the row to be deleted. This allow at any given
     // time to know if we have any deleted information or not. If we any "true" tombstone (i.e. not an expiring cell), this value will be forced to
     // Integer.MIN_VALUE, but if we don't and have expiring cells, this will the time at which the first expiring cell expires. If we have no tombstones and
@@ -203,9 +203,11 @@ public class BTreeRow extends AbstractRow
 
     public boolean isEmpty()
     {
-        return primaryKeyLivenessInfo().isEmpty()
-               && deletion().isLive()
-               && BTree.isEmpty(btree);
+        boolean isEmpty = primaryKeyLivenessInfo().isEmpty() && deletion().isLive();
+        if(primaryKeyLivenessInfo.isShortCircuiting()) {
+            return isEmpty;
+        }
+        return isEmpty && BTree.isEmpty(btree);
     }
 
     public Deletion deletion()
@@ -399,10 +401,15 @@ public class BTreeRow extends AbstractRow
         if (!hasDeletion(nowInSec))
             return this;
 
-        LivenessInfo newInfo = purger.shouldPurge(primaryKeyLivenessInfo, nowInSec) ? LivenessInfo.EMPTY : primaryKeyLivenessInfo;
+        LivenessInfo newInfo = purger.shouldPurge(primaryKeyLivenessInfo, nowInSec) ? LivenessInfo.empty(primaryKeyLivenessInfo.isShortCircuiting()) : primaryKeyLivenessInfo;
         Deletion newDeletion = purger.shouldPurge(deletion.time()) ? Deletion.LIVE : deletion;
 
-        return transformAndFilter(newInfo, newDeletion, (cd) -> cd.purge(purger, nowInSec));
+        return transformAndFilter(newInfo, newDeletion, (cd) -> {
+            if(newInfo.isEmpty() && newInfo.isShortCircuiting()) {
+                return null;
+            }
+            return cd.purge(purger, nowInSec);
+        });
     }
 
     private Row transformAndFilter(LivenessInfo info, Deletion deletion, Function<ColumnData, ColumnData> function)

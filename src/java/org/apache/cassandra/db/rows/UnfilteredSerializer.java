@@ -112,6 +112,7 @@ public class UnfilteredSerializer
      */
     private final static int IS_STATIC               = 0x01; // Whether the encoded row is a static. If there is no extended flag, the row is assumed not static.
     private final static int HAS_SHADOWABLE_DELETION = 0x02; // Whether the row deletion is shadowable. If there is no extended flag (or no row deletion), the deletion is assumed not shadowable.
+    private final static int HAS_SHORT_CIRCUITING_LIVENESS_INFO = 0x04; //
 
     public void serialize(Unfiltered unfiltered, SerializationHeader header, DataOutputPlus out, int version)
     throws IOException
@@ -161,6 +162,8 @@ public class UnfilteredSerializer
             flags |= HAS_TIMESTAMP;
         if (pkLiveness.isExpiring())
             flags |= HAS_TTL;
+        if (pkLiveness.isShortCircuiting())
+            extendedFlags |= HAS_SHORT_CIRCUITING_LIVENESS_INFO;
         if (!deletion.isLive())
         {
             flags |= HAS_DELETION;
@@ -567,6 +570,8 @@ public class UnfilteredSerializer
             boolean isStatic = isStatic(extendedFlags);
             boolean hasTimestamp = (flags & HAS_TIMESTAMP) != 0;
             boolean hasTTL = (flags & HAS_TTL) != 0;
+            boolean isShortCircuitLivenessInfo = (extendedFlags & HAS_SHORT_CIRCUITING_LIVENESS_INFO) != 0;
+
             boolean hasDeletion = (flags & HAS_DELETION) != 0;
             boolean deletionIsShadowable = (extendedFlags & HAS_SHADOWABLE_DELETION) != 0;
             boolean hasComplexDeletion = (flags & HAS_COMPLEX_DELETION) != 0;
@@ -579,13 +584,13 @@ public class UnfilteredSerializer
                 in.readUnsignedVInt(); // previous unfiltered size
             }
 
-            LivenessInfo rowLiveness = LivenessInfo.EMPTY;
+            LivenessInfo rowLiveness = LivenessInfo.empty(isShortCircuitLivenessInfo);
             if (hasTimestamp)
             {
                 long timestamp = header.readTimestamp(in);
                 int ttl = hasTTL ? header.readTTL(in) : LivenessInfo.NO_TTL;
                 int localDeletionTime = hasTTL ? header.readLocalDeletionTime(in) : LivenessInfo.NO_EXPIRATION_TIME;
-                rowLiveness = LivenessInfo.withExpirationTime(timestamp, ttl, localDeletionTime);
+                rowLiveness = LivenessInfo.withExpirationTime(timestamp, ttl, localDeletionTime, isShortCircuitLivenessInfo);
             }
 
             builder.addPrimaryKeyLivenessInfo(rowLiveness);
@@ -619,7 +624,8 @@ public class UnfilteredSerializer
                 throw e;
             }
 
-            return builder.build();
+            Row result = builder.build();
+            return result;
         }
         catch (RuntimeException | AssertionError e)
         {
@@ -734,6 +740,6 @@ public class UnfilteredSerializer
 
     public static boolean hasExtendedFlags(Row row)
     {
-        return row.isStatic() || row.deletion().isShadowable();
+        return row.isStatic() || row.deletion().isShadowable() || row.primaryKeyLivenessInfo().isShortCircuiting();
     }
 }

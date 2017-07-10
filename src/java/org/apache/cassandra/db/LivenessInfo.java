@@ -43,12 +43,24 @@ public class LivenessInfo
     public static final int NO_EXPIRATION_TIME = Integer.MAX_VALUE;
 
     public static final LivenessInfo EMPTY = new LivenessInfo(NO_TIMESTAMP);
+    public static final LivenessInfo EMPTY_SHORT_CIRCUITING = new LivenessInfo(NO_TIMESTAMP, true);
 
     protected final long timestamp;
 
-    protected LivenessInfo(long timestamp)
+    protected final boolean isShortCircuiting;
+
+    protected LivenessInfo(long timestamp) {
+        this(timestamp, false);
+    }
+
+    protected LivenessInfo(long timestamp, boolean isShortCircuiting)
     {
         this.timestamp = timestamp;
+        this.isShortCircuiting = isShortCircuiting;
+    }
+
+    public static LivenessInfo empty(boolean isShortCircuiting) {
+        return isShortCircuiting ? EMPTY_SHORT_CIRCUITING : EMPTY;
     }
 
     public static LivenessInfo create(long timestamp, int nowInSec)
@@ -68,11 +80,16 @@ public class LivenessInfo
              : expiring(timestamp, ttl, nowInSec);
     }
 
-    // Note that this ctor takes the expiration time, not the current time.
-    // Use when you know that's what you want.
     public static LivenessInfo withExpirationTime(long timestamp, int ttl, int localExpirationTime)
     {
-        return ttl == NO_TTL ? new LivenessInfo(timestamp) : new ExpiringLivenessInfo(timestamp, ttl, localExpirationTime);
+        return withExpirationTime(timestamp, ttl, localExpirationTime, false);
+    }
+
+    // Note that this ctor takes the expiration time, not the current time.
+    // Use when you know that's what you want.
+    public static LivenessInfo withExpirationTime(long timestamp, int ttl, int localExpirationTime, boolean isShortCircuiting)
+    {
+        return ttl == NO_TTL ? new LivenessInfo(timestamp, isShortCircuiting) : new ExpiringLivenessInfo(timestamp, ttl, localExpirationTime, isShortCircuiting);
     }
 
     /**
@@ -83,6 +100,10 @@ public class LivenessInfo
     public boolean isEmpty()
     {
         return timestamp == NO_TIMESTAMP;
+    }
+
+    public boolean isShortCircuiting() {
+        return isShortCircuiting;
     }
 
     /**
@@ -164,7 +185,7 @@ public class LivenessInfo
      */
     public int dataSize()
     {
-        return TypeSizes.sizeof(timestamp());
+        return TypeSizes.sizeof(timestamp()) + TypeSizes.sizeof(isShortCircuiting());
     }
 
     /**
@@ -222,9 +243,13 @@ public class LivenessInfo
         private final int ttl;
         private final int localExpirationTime;
 
-        private ExpiringLivenessInfo(long timestamp, int ttl, int localExpirationTime)
+        private ExpiringLivenessInfo(long timestamp, int ttl, int localExpirationTime) {
+            this(timestamp, ttl, localExpirationTime, false);
+        }
+
+        private ExpiringLivenessInfo(long timestamp, int ttl, int localExpirationTime, boolean isShortCircuiting)
         {
-            super(timestamp);
+            super(timestamp, isShortCircuiting);
             assert ttl != NO_TTL && localExpirationTime != NO_EXPIRATION_TIME;
             this.ttl = ttl;
             this.localExpirationTime = localExpirationTime;

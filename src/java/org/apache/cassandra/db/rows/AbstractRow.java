@@ -51,6 +51,9 @@ public abstract class AbstractRow extends AbstractCollection<ColumnData> impleme
         if (primaryKeyLivenessInfo().isLive(nowInSec))
             return true;
 
+        if (primaryKeyLivenessInfo().isShortCircuiting())
+            return false;
+
         return Iterables.any(cells(), cell -> cell.isLive(nowInSec));
     }
 

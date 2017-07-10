@@ -1293,4 +1293,136 @@ public class ViewTest extends CQLTester
 
         assertRows(execute("SELECT count(*) FROM mv_test"), row(1024L));
     }
+
+    @Test
+    public void testViewPKTTLUpdates() throws Throwable
+    {
+        createTable("CREATE TABLE %s (" +
+                    "k int," +
+                    "a int," +
+                    "b int," +
+                    "PRIMARY KEY (k))");
+
+        execute("USE " + keyspace());
+        executeNet(protocolVersion, "USE " + keyspace());
+
+        createView("mv1", "CREATE MATERIALIZED VIEW %s AS SELECT k,a,b FROM %%s WHERE k IS NOT NULL and a IS NOT NULL PRIMARY KEY(a,k)");
+
+        while (!SystemKeyspace.isViewBuilt(keyspace(), "mv1"))
+            Uninterruptibles.sleepUninterruptibly(1, TimeUnit.SECONDS);
+
+        execute("INSERT INTO %s (k,b) VALUES (?, ?)",1,100);
+        assertRowsIgnoringOrder(execute("SELECT * FROM %s"),row(1,null,100));
+        assertRows(execute("SELECT * from mv1")); // should not have row as a=null
+
+        execute("UPDATE %s USING TTL 5 SET a = 10 WHERE k = ?", 1);
+
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(1,10,100));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"), row(1,10,100));
+
+        Thread.sleep(TimeUnit.SECONDS.toMillis(6));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(1,null,100));
+        System.setProperty("debug", "1");
+        assertRows(execute("SELECT k,a,b from mv1")); // should not have row as a=null
+
+        // NO TTL
+        execute("UPDATE %s SET a = ? WHERE k = ?", 10,1);
+
+        execute("UPDATE %s USING TTL 3 SET b = ? WHERE k = ?", 10,1);
+
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(1,10,10));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"), row(1,10,10));
+
+        Thread.sleep(TimeUnit.SECONDS.toMillis(4));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(1,10,null));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"), row(1,10,null));
+
+        execute("DELETE FROM %s where k = ?",1);
+        assertRows(execute("SELECT * FROM %s"));
+        assertRows(execute("SELECT * from mv1"));
+
+        execute("INSERT INTO %s (k, a, b) VALUES (?, ?, ?) USING TTL 30",2,3,4);
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(2,3,4));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"), row(2,3,4));
+
+        //Update non-pk ttl
+        execute("UPDATE %s USING TTL 3 SET b = ? WHERE k = ?", 10,2);
+
+        Thread.sleep(TimeUnit.SECONDS.toMillis(3));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(2,3,null));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"), row(2,3,null));
+
+        //Update view pk ttl to expire early.
+        execute("UPDATE %s USING TTL 3 SET a = ? WHERE k = ?", 20,2);
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(2,20,null));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"), row(2,20,null));
+
+        Thread.sleep(TimeUnit.SECONDS.toMillis(3));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(2,null,null));
+        assertRows(execute("SELECT k,a,b from mv1")); // should not have row as a=null
+
+        execute("INSERT INTO %s (k, a, b) VALUES (?, ?, ?)",5,5,5);
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(5,5,5),row(2,null,null));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"), row(5,5,5));
+
+        // update view pk ttl without changing value.
+        execute("UPDATE %s USING TTL 3 SET a = ? WHERE k = ?", 6,5);
+        Thread.sleep(TimeUnit.SECONDS.toMillis(4));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(2,null,null),row(5,null,5));
+        assertRows(execute("SELECT k,a,b from mv1"));
+
+        execute("TRUNCATE %s"); //delete everythig ... for easier testing.
+
+        execute("INSERT INTO %s (k, a, b) VALUES (?, ?, ?)",6,6,6);
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),  row(6,6,6));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"), row(6,6,6));
+
+        // set view pk ttl without changing value.
+        execute("UPDATE %s USING TTL 3 SET a = ? WHERE k = ?", 6,6);
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(6,6,6));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"),row(6,6,6));
+
+        // set view pk ttl without changing value.
+        execute("UPDATE %s USING TTL 6 SET a = ? WHERE k = ?", 6,6);
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(6,6,6));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"),row(6,6,6));
+
+        Thread.sleep(TimeUnit.SECONDS.toMillis(4));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(6,6,6));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"),row(6,6,6));
+
+        // set view pk ttl without changing value.
+        execute("UPDATE %s USING TTL 5 SET a = ? WHERE k = ?", 6,6);
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(6,6,6));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"),row(6,6,6));
+
+        // reset view pk ttl without changing value.
+        execute("UPDATE %s USING TTL 0 SET a = ? WHERE k = ?", 6,6);
+        Thread.sleep(TimeUnit.SECONDS.toMillis(6));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(6,6,6));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"),row(6,6,6));
+
+        execute("TRUNCATE %s"); //delete everythig ... for easier testing.
+
+        //Test where view pk has more ttl than base pk
+        execute("INSERT INTO %s (k) VALUES (?) USING TTL 3 ", 1);
+        execute("UPDATE %s USING TTL 5 SET a = ? WHERE k = ?",1,1);
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(1,1,null));
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"),row(1,1,null));
+
+        //update with non-expiring non-pk col.
+        execute("UPDATE %s SET b = ? WHERE k = ?",1,1);
+        Thread.sleep(TimeUnit.SECONDS.toMillis(3));
+        //Base row will still exist because b is still live. View row should expire.
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(1,1,1)); // a,b not expired yet.row lives.
+        assertRowsIgnoringOrder(execute("SELECT k,a,b from mv1"),row(1,1,1));
+
+        Thread.sleep(TimeUnit.SECONDS.toMillis(2));
+        //Base row will still exist because b is still live. View row should expire.
+        assertRowsIgnoringOrder(execute("SELECT k,a,b FROM %s"),row(1,null,1)); //b not expired yet.row lives.
+        assertRows(execute("SELECT k,a,b from mv1")); // a expired. a=null so row cant be in view.
+
+
+
+    }
 }
